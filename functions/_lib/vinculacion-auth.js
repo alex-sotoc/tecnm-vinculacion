@@ -1,4 +1,7 @@
-// Autenticación por cookie firmada para el panel del encargado.
+// SOLO PROTOTIPO ACADEMICO. Credenciales integradas del lado del servidor.
+// NO APTO para datos reales ni repositorios públicos; usa secretos en produccion.
+const DEMO_ADMIN_PASSWORD = 'VinculacionDemo2026!';
+const DEMO_SESSION_SECRET = 'N-WJYg6w0NQhl1as5j0NlXBsnJyWHHYLif-okMyYCac-xiA_DoogQXdN_CCFZb2tYiQN-nZNx6E';
 const encoder = new TextEncoder();
 export const BASE_HEADERS = {
   'Cache-Control': 'no-store, private',
@@ -23,9 +26,8 @@ async function hmac(secret, data) {
   const key=await crypto.subtle.importKey('raw',encoder.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
   return new Uint8Array(await crypto.subtle.sign('HMAC',key,encoder.encode(data)));
 }
-// Solo comprueba el login. WF-05 se valida de manera independiente en data.js.
 export function configOk(env){
-  return Boolean(env.ADMIN_PASSWORD && env.ADMIN_PASSWORD.length >= 12 && env.ADMIN_SESSION_SECRET && env.ADMIN_SESSION_SECRET.length >= 32);
+  return true; // Acceso de demostracion; autenticacion de WF-05 se comprueba aparte en data.js
 }
 export async function verifyPassword(input, real) {
   const a=await crypto.subtle.digest('SHA-256',encoder.encode(String(input)));
@@ -52,7 +54,7 @@ export async function isAdmin(request,env) {
   try {
     const [data,signature]=value.split('.');
     if(!data||!signature) return false;
-    const expected=await hmac(env.ADMIN_SESSION_SECRET,data);
+    const expected=await hmac(DEMO_SESSION_SECRET,data);
     const found=un64(signature);
     let diff=expected.length ^ found.length;
     for(let i=0;i<Math.max(expected.length,found.length);i++)diff |= (expected[i]||0)^(found[i]||0);
@@ -63,3 +65,5 @@ export async function isAdmin(request,env) {
 }
 export function cookieSet(value){return `ss_admin=${value}; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Strict`;}
 export function cookieClear(){return 'ss_admin=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict';}
+
+export const DEMO_CREDENTIALS = {password: DEMO_ADMIN_PASSWORD, sessionSecret: DEMO_SESSION_SECRET};
