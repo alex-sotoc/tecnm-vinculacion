@@ -1,22 +1,36 @@
 import {json,isAdmin} from '../../_lib/vinculacion-auth.js';
-// URL de n8n de este proyecto: dato público, sin necesidad de variable nueva.
-const WF05_URL='https://servicio-social.app.n8n.cloud/webhook/ss-vinculacion-panel';
+
+// Cambia esta URL solo si cambia la ruta de producción de WF-05.
+const WF05_URL = 'https://servicio-social.app.n8n.cloud/webhook/ss-vinculacion-panel';
+
 export async function onRequestGet({request,env}) {
-  if(!(await isAdmin(request,env)))return json({ok:false,error:'Inicia sesión para consultar las estadísticas.'},401);
-  if(!env.N8N_WEBHOOK_KEY)return json({ok:false,error:'Falta N8N_WEBHOOK_KEY en las variables de PRODUCCION de este nuevo proyecto.',codigo:'CONFIG_WF05'},503);
-  const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),45000);
+  if (!(await isAdmin(request,env))) return json({ok:false,error:'Inicia sesión para consultar las estadísticas.'},401);
+  if (!env.N8N_WEBHOOK_KEY || String(env.N8N_WEBHOOK_KEY).length<20)
+    return json({ok:false,error:'Falta N8N_WEBHOOK_KEY en Cloudflare Production.'},503);
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),25000);
   try {
-    const upstream=await fetch(WF05_URL,{
-      method:'GET',signal:ctrl.signal,
+    const upstream=await fetch(WF05_URL, {
+      method:'GET',
       headers:{'X-Automation-Key':env.N8N_WEBHOOK_KEY,'Accept':'application/json'},
+      signal:controller.signal,
       redirect:'error'
     });
-    if(!upstream.ok)return json({ok:false,error:`WF-05 respondió HTTP ${upstream.status}. Comprueba que el workflow esté publicado y que Header Auth use exactamente X-Automation-Key y el secreto de este proyecto.`,codigo:'WF05_UPSTREAM'},502);
-    const data=await upstream.json();
-    if(data?.ok!==true||!Array.isArray(data.estudiantes)||!Array.isArray(data.expedientes)||!Array.isArray(data.documentos))
-      return json({ok:false,error:'WF-05 devolvió un formato inesperado. Revisa el nodo Preparar panel.'},502);
-    return json(data);
+    if (!upstream.ok) {
+      const status=upstream.status;
+      return json({ok:false,error:status===401||status===403 ?
+        `n8n rechazó la clave Header Auth (HTTP ${status}). Revisa X-Automation-Key.` :
+        `n8n respondió HTTP ${status}. Verifica workflow activo, URL de producción y ejecución.`,codigo:'WF05_HTTP'},502);
+    }
+    const contentType=upstream.headers.get('content-type')||'';
+    if (!contentType.toLowerCase().includes('json')) return json({ok:false,error:'n8n no devolvió JSON. Revisa Respond to Webhook.'},502);
+    const raw=await upstream.text();
+    if (raw.length>8_000_000) return json({ok:false,error:'La respuesta de n8n es demasiado grande.'},502);
+    const payload=JSON.parse(raw);
+    if (payload?.ok!==true || !Array.isArray(payload.estudiantes) || !Array.isArray(payload.expedientes) || !Array.isArray(payload.documentos))
+      return json({ok:false,error:'El JSON de n8n no contiene ok:true, estudiantes, expedientes y documentos como listas.'},502);
+    return json({ok:true,fetched_at:payload.fetched_at||new Date().toISOString(),estudiantes:payload.estudiantes,expedientes:payload.expedientes,documentos:payload.documentos});
   } catch(error) {
-    return json({ok:false,error:error?.name==='AbortError'?'WF-05 tardó demasiado en responder.':'No fue posible consultar WF-05.'},504);
-  } finally {clearTimeout(t)}
+    return json({ok:false,error:error?.name==='AbortError'?'n8n tardó demasiado en responder (25 segundos).':'No fue posible conectar con n8n o leer su JSON.'},504);
+  } finally { clearTimeout(timeout); }
 }

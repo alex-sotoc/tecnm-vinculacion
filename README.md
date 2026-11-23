@@ -1,77 +1,71 @@
-# Portal independiente de Vinculación · TecNM Campus Matehuala
+# Panel de Vinculación | TecNM Campus Matehuala
 
-Esta carpeta es **un repositorio completo**, distinto del portal estudiantil. Incluye:
+Sitio estático + Cloudflare Pages Functions. Conserva panel, expedientes, filtros y PDF local. Sin dependencias ni build.
 
-- `index.html`, `styles.css`, `app.js`, `pdf.js`: interfaz y descarga directa del reporte PDF, sin bibliotecas externas.
-- `functions/_lib/vinculacion-auth.js`: sesiones firmadas con cookie HttpOnly.
-- `functions/api/vinculacion/login.js`, `session.js`, `logout.js`, `data.js`: login y consulta autenticada a WF-05.
-- La conexión utiliza el **WF-05 que ya tienes** en n8n: no es necesario importarlo de nuevo.
+## PUBLICAR
 
-## 1) Crear un repositorio nuevo en GitHub
+1. Crea un **repositorio NUEVO** en GitHub, preferiblemente privado. Extrae el ZIP y sube TODOS los archivos y la carpeta `functions` a la raíz del repositorio. `index.html` debe estar en raíz, NO dentro de una carpeta adicional. **NO subas el archivo separado de secretos.**
+2. Cloudflare Dashboard > **Workers & Pages** > **Create** > **Pages** > **Connect to Git** (no Workers) > selecciona el repositorio.
+3. Framework **None**, build command **vacío**, build output directory **`.`**, root directory **raíz del repositorio**, production branch **main**.
+4. En el proyecto de Pages, Settings > **Variables and Secrets** > **Production**, crea tres valores tipo **Secret**:
+   - `ADMIN_PASSWORD`: inventa una contraseña PRIVADA de al menos 12 caracteres para el usuario fijo `vinculacion`.
+   - `ADMIN_SESSION_SECRET`: copia el valor del archivo privado separado `CLAVES_PRIVADAS_NO_SUBIR_A_GITHUB.txt`.
+   - `N8N_WEBHOOK_KEY`: copia el valor del mismo archivo privado.
+5. Después de guardar variables, haz un despliegue NUEVO desde GitHub para que se apliquen. Verifica Production deployment = Success. Si ya existía proyecto de Pages, asegúrate de que los secretos están en ESE proyecto y no otro.
 
-1. Entra a https://github.com y accede a tu cuenta.
-2. Pulsa el icono `+` arriba a la derecha y luego **New repository**. También puedes abrir https://github.com/new.
-3. Nombre sugerido: `tecnm-vinculacion`. Elige **Private** si tu plan y configuración de Cloudflare permiten conectar el repositorio privado (GitHub acepta repositorios privados para la integración).
-4. Marca **Add a README file** solo si deseas hacerlo; este ZIP ya incluye README.md. Para evitar conflictos, mejor **no** marques README.
-5. Pulsa **Create repository**.
-6. En el repositorio vacío pulsa **uploading an existing file** (o **Add file → Upload files**).
-7. **Extrae el ZIP primero**, abre la carpeta extraída y arrastra el CONTENIDO (index.html, styles.css, app.js, pdf.js y functions/) a GitHub. **No arrastres la carpeta exterior como una única carpeta anidada**. `index.html` debe quedar visible en la raíz.
-8. Pulsa **Commit changes**. Elige la rama `main` como rama de producción.
+## n8n — WF-05
 
-## 2) Crear otro proyecto de Cloudflare Pages
+En el Webhook GET con path `ss-vinculacion-panel` configura Authentication = Header Auth; la credencial debe ser:
 
-1. En https://dash.cloudflare.com entra a **Workers & Pages**.
-2. Elige **Create application** (o Create) → **Pages** → **Connect to Git**. Si aparece una interfaz que comienza con Workers, busca la alternativa Pages.
-3. Selecciona GitHub, autoriza el repositorio nuevo si es necesario y elige `tecnm-vinculacion`.
-4. Elige un nombre de proyecto disponible, por ejemplo `tecnm-vinculacion`, y rama de producción `main`.
-5. Framework preset: **None**. Build command: **dejar vacío**. Build output directory: **`.` (punto)** o `/` si la interfaz exige raíz del proyecto. Root directory: **raíz del repositorio**.
-6. Pulsa **Save and Deploy** / **Deploy**. Cloudflare te mostrará la URL real `https://NOMBRE-ELEGIDO.pages.dev/`. No reutilices el proyecto antiguo.
+- **Name** = `X-Automation-Key` (este es el NOMBRE DEL HEADER, no un segundo secreto)
+- **Value** = el valor privado de `N8N_WEBHOOK_KEY` (EXACTAMENTE igual)
+- Respond = Using Respond to Webhook Node.
 
-Si Cloudflare ofrece opciones distintas para Build output directory, comprueba que se sirva el `index.html` del nivel raíz y se publique la carpeta `functions` como Pages Functions.
+Nodos: Webhook → Leer estudiantes (ESTUDIANTES) → Leer expedientes (EXPEDIENTES) → Leer documentos (DOCUMENTOS) → Preparar panel (Code) → Respond to Webhook (`First Incoming Item`).
 
-## 3) Configurar tres secretos (solo en el proyecto NUEVO)
+ATENCIÓN: si tu tercer nodo todavía se llama `Leer estudiantes1`, renómbralo a `Leer expedientes`, porque el código del Code node lo consulta usando ese nombre exacto. No renombres nodos sin revisar expresiones.
 
-Cloudflare → Workers & Pages → `tecnm-vinculacion` → **Settings → Variables and Secrets → Add**, entorno **Production**.
+Código del Code node (Run Once for All Items):
 
-- `ADMIN_PASSWORD`: inventa contraseña nueva de 12 caracteres o más. Usuario fijo: `vinculacion`. No subas la contraseña a GitHub ni me la compartas.
-- `ADMIN_SESSION_SECRET`: cadena aleatoria de 32 caracteres o más. Ejemplo para generarla localmente en PowerShell: `[Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(48))`.
-- `N8N_WEBHOOK_KEY`: una clave nueva o la que ya usa el **Header Auth de WF-05**, nunca una contraseña de un estudiante. Debe coincidir exactamente con el valor del encabezado `X-Automation-Key` configurado en n8n.
+```javascript
+const read = name => $(name).all().map(item => item.json || {});
+const clean = v => String(v ?? '').trim();
+const numeric = v => v === '' || v == null ? 0 : (Number.isFinite(Number(v)) ? Number(v) : 0);
+const students = read('Leer estudiantes');
+const files = read('Leer expedientes');
+const docs = read('Leer documentos');
+return [{json:{
+ ok:true, fetched_at:new Date().toISOString(),
+ estudiantes:students.filter(s=>clean(s.control)).map(s=>({
+  control:clean(s.control), nombre:clean(s.nombre), carrera:clean(s.carrera),
+  creditos_aprobados:numeric(s.creditos_aprobados), creditos_totales:numeric(s.creditos_totales),
+  porcentaje_creditos:numeric(s.porcentaje_creditos), elegible:clean(s.elegible)
+ })),
+ expedientes:files.filter(e=>clean(e.expediente_id)).map(e=>({
+  expediente_id:clean(e.expediente_id), control:clean(e.control), convocatoria_id:clean(e.convocatoria_id),
+  etapa_portal:clean(e.etapa_portal), estado:clean(e.estado),
+  periodo_habilitado:numeric(e.periodo_habilitado), horas_acreditadas:numeric(e.horas_acreditadas)
+ })),
+ documentos:docs.filter(d=>clean(d.documento_id)).map(d=>({
+  documento_id:clean(d.documento_id), expediente_id:clean(d.expediente_id), tipo_id:clean(d.tipo_id),
+  periodo:numeric(d.periodo), version:numeric(d.version), row_number:numeric(d.row_number),
+  estado:clean(d.estado), horas_validadas:numeric(d.horas_validadas)
+ }))
+}}];
+```
 
-Selecciona tipo **Secret** para las tres. Guarda en **Production**, luego crea un **nuevo despliegue** con un commit en GitHub (por ejemplo, actualizar README.md) y comprueba estado Success.
+Publica/activa el workflow y utiliza la URL de PRODUCCIÓN (sin `webhook-test`). La URL esperada que ya está en `functions/api/vinculacion/data.js` es:
+`https://servicio-social.app.n8n.cloud/webhook/ss-vinculacion-panel`
+Si la URL real es distinta, cambia esa constante antes de publicar.
 
-**Importante**: las variables se crean en el proyecto nuevo, NO en `tecnm-servicio-social`.
+## VERIFICAR EN ESTE ORDEN
 
-## 4) Conservar WF-05
+1. Abre `https://TU-PROYECTO.pages.dev/api/vinculacion/session` SIN iniciar sesión: debe devolver JSON con HTTP 401. Si muestra HTML/404, las Functions NO se publicaron; no sigas probando contraseñas.
+2. Abre la raíz del sitio, inicia con usuario `vinculacion` y el valor PRIVADO de `ADMIN_PASSWORD`. Si indica variables ausentes (503), verifica Production y redespliega.
+3. Con sesión iniciada, `/api/vinculacion/session` debe devolver `{"ok":true,"usuario":"vinculacion"}`.
+4. Con sesión iniciada, `/api/vinculacion/data` debe devolver `ok:true` y tres listas. 502 con 401/403 de n8n significa Header Auth mal configurado; 502 JSON inválido significa problema en el workflow; 504 significa red o timeout.
+5. Verifica panel, búsquedas y PDF. Los PDF se generan en el navegador sin otro workflow.
 
-**No crees otro workflow si ya tienes WF-05**. Abre en n8n `WF-05 | Panel y estadisticas de Vinculacion`:
+## ADVERTENCIAS DE SEGURIDAD
 
-1. Nodo `Entrada panel Vinculacion`: método GET, path `ss-vinculacion-panel`, Authentication `Header Auth`, responde mediante `Respond to Webhook`.
-2. La credencial Header Auth se configura con Name `X-Automation-Key` y Value **exactamente igual** a `N8N_WEBHOOK_KEY` del proyecto nuevo.
-3. Conecta los tres nodos de Google Sheets: `Leer estudiantes` (ESTUDIANTES), `Leer expedientes` (EXPEDIENTES), `Leer documentos` (DOCUMENTOS).
-4. `Preparar panel` debe devolver `{ok:true, estudiantes:[...], expedientes:[...], documentos:[...]}`.
-5. `Responder panel`: `First Incoming Item`.
-6. Guarda y publica WF-05. URL de producción prevista: `https://servicio-social.app.n8n.cloud/webhook/ss-vinculacion-panel`.
-
-Si tu clave n8n actual coincide con otro workflow, no la cambies sin revisar los consumidores. Puedes reutilizar la existente en el proyecto nuevo; así evitas romper otros workflows.
-
-## 5) Comprobar el acceso, datos y PDF
-
-1. Abre la dirección real del nuevo sitio `.pages.dev/`.
-2. En el login usa `vinculacion` y la contraseña de `ADMIN_PASSWORD`.
-3. Verifica que aparezca Panel general, Expedientes y Reportes.
-4. Tras iniciar sesión, abre la ruta `https://TU-PROYECTO.pages.dev/api/vinculacion/session`. Debe devolver `{"ok":true,"usuario":"vinculacion"}`.
-5. Abre `https://TU-PROYECTO.pages.dev/api/vinculacion/data`. Debe devolver `{"ok":true,"estudiantes":[...],"expedientes":[...],"documentos":[...]}`.
-6. En Reportes selecciona convocatoria y pulsa **Descargar reporte PDF**. Se generará el archivo en el navegador, usando los datos obtenidos de WF-05.
-
-### Diagnóstico rápido
-
-- `{"ok":false,"usuario":null}` **en `/api/vinculacion/session`**: no hay sesión válida en ese navegador; es normal antes de iniciar sesión. NO es un error de n8n.
-- Login muestra «aún no está configurado»: faltan `ADMIN_PASSWORD` o `ADMIN_SESSION_SECRET` en **Production** del nuevo proyecto, o falta un despliegue posterior.
-- Login funciona, pero estadísticas muestra `Falta N8N_WEBHOOK_KEY`: crear ese secreto en **Production** y volver a desplegar.
-- Estadísticas muestra HTTP 401/403 de WF-05: revisar Name `X-Automation-Key` y Value, iguales en los dos sistemas.
-- No hay ejecuciones en WF-05: comprobar publicación y URL de producción.
-- `502` con formato inesperado: revisar salida del nodo `Preparar panel`.
-
-## Seguridad
-
-Este es un prototipo académico con datos ficticios. No pongas contraseñas ni tokens en frontend o GitHub. Para utilizar expedientes reales se necesita acceso institucional con MFA y controles de seguridad/auditoría adicionales. Mantén protegido el repositorio y restringe el acceso a los datos.
+NO subas secretos al repositorio ni los copies a `app.js`, `.html`, README o URL. El archivo privado se entrega fuera del ZIP. Sustituye cualquier contraseña anterior comprometida. Usa datos ficticios hasta tener controles institucionales; para estudiantes reales se requiere autorización y seguridad adicional (por ejemplo MFA, limitación de intentos, auditoría y gestión de acceso). La página consulta datos al pulsar actualizar; n8n NO hace push espontáneo.
